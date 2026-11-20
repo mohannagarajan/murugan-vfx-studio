@@ -1,0 +1,32 @@
+name: Render Paper-Cutout VFX Video
+on:
+  workflow_dispatch:
+
+jobs:
+  build-vfx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install gdown fal-client faster-whisper requests
+          npm install
+      - name: Run SAM2 + LaMa + Whisper
+        env:
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+        run: python pipeline.py
+      - name: Render 60fps MP4
+        run: npx remotion render src/index.ts VfxScene out/palani_murugan_vfx.mp4 --fps=60 --crf=17
+      - name: Upload Video
+        uses: actions/upload-artifact@v4
+        with:
+          name: palani-murugan-vfx-final
+          path: out/palani_murugan_vfx.mp4
+          
