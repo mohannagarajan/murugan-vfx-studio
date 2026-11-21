@@ -1,5 +1,6 @@
-import os, json, glob, base64, subprocess, requests
-import fal_client
+import os, json, glob, subprocess
+import cv2
+import numpy as np
 from faster_whisper import WhisperModel
 
 os.makedirs("media", exist_ok=True)
@@ -27,14 +28,6 @@ if len(segs) >= 5:
 else:
     cuts = [round(dur * i / 5.0, 2) for i in range(6)]
 
-def to_data_uri(path):
-    ext = os.path.splitext(path)[1].lower().lstrip(".")
-    if ext == "jpg":
-        ext = "jpeg"
-    with open(path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
-    return f"data:image/{ext};base64,{b64}"
-
 all_imgs = (
     glob.glob("media/**/*.webp", recursive=True)
     + glob.glob("media/**/*.jpg", recursive=True)
@@ -44,30 +37,50 @@ images = sorted(all_imgs, key=lambda p: os.path.basename(p))[:5]
 manifest = []
 
 for idx, img_path in enumerate(images, start=1):
-    img_url = to_data_uri(img_path)
+    img = cv2.imread(img_path)
+    h, w = img.shape[:2]
 
-    seg_res = fal_client.subscribe("fal-ai/sam2/auto-segment", arguments={
-        "image_url": img_url,
-        "points_per_side": 32,
-        "pred_iou_thresh": 0.88
-    })
+    # Detect white paper-cutout sticker borders & foreground subjects
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    white_border = cv2.inRange(hsv, (0, 0, 215), (180, 45, 255))
 
-    bg_res = fal_client.subscribe("fal-ai/lama", arguments={
-        "image_url": img_url,
-        "mask_url": seg_res["combined_mask"]["url"]
-    })
+    # Central subject mask via GrabCut
+    mask = np.zeros((h, w), np.uint8)
+    rect = (int(w * 0.08), int(h * 0.12), int(w * 0.84), int(h * 0.78))
+    bgdModel = np.zeros((1, 65), np.float64)
+    fgdModel = np.zeros((1, 65), np.float64)
+    cv2.grabCut(img, mask, rect, bgdModel, fgdModel, 4, cv2.GC_INIT_WITH_RECT)
+    fg_mask = np.where((mask == 2) | (mask == 0), 0, 1).astype("uint8") * 255
+
+    # Clean & smooth sticker edges
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel)
+    fg_mask = cv2.GaussianBlur(fg_mask, (7, 7), 0)
+
+    # Inpaint background cleanly where characters were lifted
+    inpaint_mask = cv2.dilate(fg_mask, kernel, iterations=2)
+    bg_clean = cv2.inpaint(img, inpaint_mask, 7, cv2.INPAINT_TELEA)
     bg_local = f"public/layers/scene{idx}_bg.png"
-    with open(bg_local, "wb") as f:
-        f.write(requests.get(bg_res["image"]["url"]).content)
+    cv2.imwrite(bg_local, bg_clean)
+
+    # Split distinct character cutouts (left-to-right)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats((fg_mask > 127).astype(np.uint8))
+    comps = []
+    for lbl in range(1, num_labels):
+        area = stats[lbl, cv2.CC_STAT_AREA]
+        if area < (w * h * 0.025):
+            continue
+        comps.append((stats[lbl, cv2.CC_STAT_LEFT], lbl))
+    comps.sort(key=lambda x: x[0])
 
     char_paths = []
-    masks_sorted = sorted(seg_res["masks"], key=lambda m: m["bbox"][0])
-    for c_i, m in enumerate(masks_sorted, start=1):
-        if m["area_ratio"] < 0.02 or m["area_ratio"] > 0.50:
-            continue
+    for c_i, (_, lbl) in enumerate(comps, start=1):
+        comp_alpha = np.where(labels == lbl, 255, 0).astype(np.uint8)
+        comp_alpha = cv2.GaussianBlur(comp_alpha, (5, 5), 0)
+        rgba = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+        rgba[:, :, 3] = comp_alpha
         c_local = f"public/layers/scene{idx}_char{c_i}.png"
-        with open(c_local, "wb") as f:
-            f.write(requests.get(m["cutout_url"]).content)
+        cv2.imwrite(c_local, rgba)
         char_paths.append(f"layers/scene{idx}_char{c_i}.png")
 
     manifest.append({
