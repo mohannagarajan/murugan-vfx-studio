@@ -1,4 +1,4 @@
-import os, asyncio, subprocess, time
+import os, asyncio, subprocess, time, requests
 import edge_tts
 from huggingface_hub import InferenceClient
 from faster_whisper import WhisperModel
@@ -53,26 +53,52 @@ dur = float(subprocess.check_output([
     "-of", "default=noprint_wrappers=1:nokey=1", "out/voice.mp3"
 ]).decode().strip())
 
-# 3. Generate Brand-New Realistic AI Images via Free Hugging Face Models
-client = InferenceClient(token=HF_TOKEN)
-IMAGE_MODELS = [
+# 3. Generate Brand-New Realistic AI Images (HF Direct Free Provider + AI Horde Free GPU Fallback)
+client = InferenceClient(provider="hf-inference", api_key=HF_TOKEN)
+HF_MODELS = [
     "black-forest-labs/FLUX.1-schnell",
-    "stabilityai/stable-diffusion-xl-base-1.0"
+    "stabilityai/stable-diffusion-xl-base-1.0",
+    "ByteDance/SDXL-Lightning"
 ]
 
+def generate_via_aihorde(prompt, out_path):
+    print("Trying 100% Free AI Horde GPU network...")
+    headers = {"apikey": "0000000000", "Client-Agent": "murugan-vfx:1.0:github"}
+    payload = {
+        "prompt": prompt,
+        "params": {"width": 576, "height": 1024, "steps": 20, "n": 1},
+        "models": ["AlbedoBase XL (SDXL)", "SDXL 1.0", "DreamShaper XL"],
+        "r2": True
+    }
+    res = requests.post("https://aihorde.net/api/v2/generate/async", json=payload, headers=headers, timeout=30)
+    res.raise_for_status()
+    job_id = res.json()["id"]
+    for _ in range(45):
+        time.sleep(4)
+        chk = requests.get(f"https://aihorde.net/api/v2/generate/status/{job_id}", headers=headers, timeout=20).json()
+        if chk.get("done") and chk.get("generations"):
+            img_url = chk["generations"][0]["img"]
+            img_bytes = requests.get(img_url, timeout=30).content
+            with open(out_path, "wb") as f:
+                f.write(img_bytes)
+            return True
+    return False
+
 def generate_ai_image(prompt, out_path):
-    for model_id in IMAGE_MODELS:
-        for attempt in range(3):
+    for model_id in HF_MODELS:
+        for attempt in range(2):
             try:
-                print(f"Generating AI image with {model_id} (attempt {attempt+1})...")
-                img = client.text_to_image(prompt, model=model_id, width=768, height=1344)
+                print(f"Generating AI image with {model_id} via hf-inference (attempt {attempt+1})...")
+                img = client.text_to_image(prompt, model=model_id)
                 img.save(out_path, quality=95)
-                if os.path.getsize(out_path) > 20000:
+                if os.path.getsize(out_path) > 15000:
                     return True
             except Exception as e:
                 print(f"Model {model_id} error: {e}")
-                time.sleep(4)
-    raise RuntimeError(f"Image generation failed for prompt: {prompt}")
+                time.sleep(3)
+    if generate_via_aihorde(prompt, out_path):
+        return True
+    raise RuntimeError(f"All free AI image providers failed for prompt: {prompt}")
 
 scene_dur = dur / len(SCENES)
 fps = 30
@@ -84,7 +110,7 @@ for idx, (_, vis_prompt) in enumerate(SCENES):
     norm_clip = f"clips/norm_{idx+1}.mp4"
     generate_ai_image(vis_prompt, img_path)
 
-    # Smooth Cinematic Zoom-In / Zoom-Out + Pan Motion
+    # Smooth Cinematic Zoom-In / Zoom-Out Motion
     if idx % 2 == 0:
         zoom_expr = "min(zoom+0.0015,1.25)"
     else:
