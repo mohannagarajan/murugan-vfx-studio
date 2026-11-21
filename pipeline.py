@@ -1,4 +1,4 @@
-import os, json, glob, subprocess, requests
+import os, json, glob, base64, subprocess, requests
 import fal_client
 from faster_whisper import WhisperModel
 
@@ -27,6 +27,14 @@ if len(segs) >= 5:
 else:
     cuts = [round(dur * i / 5.0, 2) for i in range(6)]
 
+def to_data_uri(path):
+    ext = os.path.splitext(path)[1].lower().lstrip(".")
+    if ext == "jpg":
+        ext = "jpeg"
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+    return f"data:image/{ext};base64,{b64}"
+
 all_imgs = (
     glob.glob("media/**/*.webp", recursive=True)
     + glob.glob("media/**/*.jpg", recursive=True)
@@ -36,7 +44,7 @@ images = sorted(all_imgs, key=lambda p: os.path.basename(p))[:5]
 manifest = []
 
 for idx, img_path in enumerate(images, start=1):
-    img_url = fal_client.upload_file(img_path)
+    img_url = to_data_uri(img_path)
 
     seg_res = fal_client.subscribe("fal-ai/sam2/auto-segment", arguments={
         "image_url": img_url,
