@@ -6,7 +6,7 @@ os.makedirs("media", exist_ok=True)
 os.makedirs("public/layers", exist_ok=True)
 
 FOLDER_URL = "https://drive.google.com/drive/folders/1vzixPqNYooLgMKDKdc3fLresRsiLQxKF"
-subprocess.run(["gdown", "--folder", FOLDER_URL, "-O", "media", "--remaining-ok"], check=True)
+subprocess.run(["gdown", "--folder", FOLDER_URL, "-O", "media"], check=True)
 
 wav_files = glob.glob("media/**/*.wav", recursive=True) + glob.glob("media/*.wav")
 wav_file = wav_files[0]
@@ -71,4 +71,4 @@ for idx, img_path in enumerate(images, start=1):
 
 with open("public/manifest.json", "w") as f:
     json.dump({"durationInFrames": int(dur * 60), "scenes": manifest}, f, indent=2)
-  
+    
